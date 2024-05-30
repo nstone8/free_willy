@@ -12,6 +12,15 @@ fn main() {
                     println!("camera model: {}", cam.model().unwrap());
                     println!("camera SN#: {}", cam.serial_number().unwrap());
                     println!("camera api version {}", cam.api_version().unwrap());
+                    println!("exposure setting: {}", cam.get_exposure().unwrap());
+                    println!("resolution: {:?}", cam.get_resolution().unwrap());
+                    let buf = cam.attach_buffer(500).expect("couldn't attach buffer");
+                    let rxframe =
+                        free_willy::stream_frames(buf, 500).expect("couldn't start stream");
+                    loop {
+                        let f = rxframe.recv().unwrap();
+                        println!("{:?}", &f[1..10]);
+                    }
                 }
                 Err(e) => println!("failed to open camera, error: {}", e),
             }
