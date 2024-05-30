@@ -30,7 +30,7 @@ impl DcamAPI {
     }
 
     /// Get a handle to a camera
-    pub fn open_cam(&self, cam_id: i32) -> Result<Camera, i32> {
+    pub fn open_cam<T: Camera>(&self, cam_id: i32) -> Result<T::Cam, i32> {
         if cam_id > self.ncam() {
             eprintln!("camera index cannot be greater than (ncam - 1)");
             return Err(bindings::DCAMERR_DCAMERR_INVALIDCAMERA);
@@ -45,7 +45,7 @@ impl DcamAPI {
         }
         //if the open worked, the hdcam pointer should not be null
         assert!(!dco.hdcam.is_null(), "null camera pointer");
-        Ok(Camera { handle: dco.hdcam })
+        Ok(T::new(dco.hdcam))
     }
 }
 
@@ -59,22 +59,29 @@ impl Drop for DcamAPI {
 }
 
 /// `struct` to represent a camera
-pub struct Camera {
+pub struct C11440_22CU {
     handle: bindings::HDCAM,
 }
 
-impl Camera {
+#[allow(drop_bounds)] //I want to make sure all cameras implement Drop so we don't end up with dangling camera handles
+pub trait Camera: Drop {
+    type Cam: Camera;
+    fn new(handle: bindings::HDCAM) -> Self::Cam;
+    fn handle(&self) -> bindings::HDCAM;
     /// use the 'raw' dcamdev_getstring() function to get camera info.
-	/// currently the API will copy the string into a buffer with a fixed length of 256 bytes
-    fn dcamdev_getstring(&self, istring: i32) -> Result<String, i32> {
+    /// currently the API will copy the string into a buffer with a fixed length of 256 bytes
+    fn dcamdev_getstring(&self, istring: i32) -> Result<String, String> {
         // make a buffer to store the result
         // I set the size of the buffer to 256 in the implementation of DCAMDEV_STRING::new
         let mut carray: [raw::c_char; 256] = [0; 256];
         let mut dcds = bindings::DCAMDEV_STRING::new(istring, carray.as_mut_ptr());
         unsafe {
-            let err = bindings::dcamdev_getstring(self.handle, &mut dcds);
+            let err = bindings::dcamdev_getstring(self.handle(), &mut dcds);
             if err != 1 {
-                return Err(err);
+                return Err(format!(
+                    "call to dcamdev_getstring failed with code {}",
+                    err
+                ));
             }
         }
         //Convert to a String
@@ -83,29 +90,52 @@ impl Camera {
         if let Ok(s) = string_result {
             return Ok(String::from(s));
         } else {
-            eprintln!("invalid UTF8");
-            return Err(bindings::DCAMERR_DCAMERR_INVALIDCAMERA);
+            return Err(String::from("invalid UTF8"));
         }
     }
     /// get the camera model
-    pub fn model(&self) -> String {
+    fn model(&self) -> Result<String, String> {
         self.dcamdev_getstring(bindings::DCAM_IDSTR_DCAM_IDSTR_MODEL)
-            .expect("couldn't read model")
     }
     /// get the DCAM API version supported by the camera
-    pub fn api_version(&self) -> String {
+    fn api_version(&self) -> Result<String, String> {
         self.dcamdev_getstring(bindings::DCAM_IDSTR_DCAM_IDSTR_DCAMAPIVERSION)
-            .expect("couldn't read api version")
     }
     /// get the camera's serial number
-    pub fn serial_number(&self) -> String {
+    fn serial_number(&self) -> Result<String, String> {
         self.dcamdev_getstring(bindings::DCAM_IDSTR_DCAM_IDSTR_CAMERAID)
-            .expect("couldn't read api version")
+    }
+    /// call the API dcamprop_getvalue to get the property associated with `i_prop`
+    fn dcamprop_getvalue(&self, i_prop: bindings::int32) -> Result<f64, i32> {
+        let mut val: f64 = 0.0;
+        let err = unsafe { bindings::dcamprop_getvalue(self.handle(), i_prop, &mut val) };
+        match err {
+            1 => Ok(val),
+            e => Err(e),
+        }
+    }
+    /// call the API dcamprop_getvalue to set the property associated with `i_prop` to `f_value`
+    fn dcamprop_setvalue(&self, i_prop: bindings::int32, f_value: f64) -> Result<(), i32> {
+        let err = unsafe { bindings::dcamprop_setvalue(self.handle(), i_prop, f_value) };
+        match err {
+            1 => Ok(()),
+            e => Err(e),
+        }
+    }
+}
+
+impl Camera for C11440_22CU {
+    type Cam = C11440_22CU;
+    fn new(handle: bindings::HDCAM) -> Self::Cam {
+        C11440_22CU { handle }
+    }
+    fn handle(&self) -> bindings::HDCAM {
+        self.handle
     }
 }
 
 /// Automatically release camera when our handle is dropped
-impl Drop for Camera {
+impl Drop for C11440_22CU {
     fn drop(&mut self) {
         unsafe {
             bindings::dcamdev_close(self.handle);
