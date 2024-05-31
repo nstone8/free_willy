@@ -4,8 +4,8 @@ use std::ops::Index;
 use std::ops::IndexMut;
 use std::os::raw;
 use std::ptr;
-use std::sync::mpsc::{sync_channel, Receiver};
-use std::thread;
+use std::sync::mpsc::{channel, sync_channel, Receiver, Sender};
+use std::thread::{self, JoinHandle};
 
 pub mod bindings;
 
@@ -194,7 +194,7 @@ impl Drop for C11440_22CU {
 /// A struct representing a framebuffer the camera can copy images into
 /// Each frame is `frame_size` bytes in size and there are `num_frames` frames allocated
 pub struct FrameBuffer {
-    camera_handle: CameraHandle,
+    camera_handle: bindings::HDCAM,
     frame_size: usize,
     num_frames: usize,
     buffer: Vec<u8>,
@@ -216,12 +216,6 @@ impl IndexMut<usize> for FrameBuffer {
     }
 }
 
-struct CameraHandle(bindings::HDCAM);
-
-/// We need to send HDCAM handles across threads. fingers crossed
-unsafe impl Sync for CameraHandle {}
-unsafe impl Send for CameraHandle {}
-
 impl FrameBuffer {
     /// Allocate memory for a buffer to hold image data and inform the API of the address
     pub fn attach(
@@ -230,7 +224,7 @@ impl FrameBuffer {
         num_frames: usize,
     ) -> Result<FrameBuffer, i32> {
         let mut me = FrameBuffer {
-            camera_handle: CameraHandle(camera_handle),
+            camera_handle: camera_handle,
             frame_size,
             num_frames,
             buffer: vec![0; frame_size * num_frames],
@@ -251,7 +245,7 @@ impl FrameBuffer {
     /// `(most_recent_frame, total_frames_captured)`
     fn dcamcap_transferinfo(&self) -> Result<(usize, i32), i32> {
         let mut ti = bindings::DCAMCAP_TRANSFERINFO::new();
-        match unsafe { bindings::dcamcap_transferinfo(self.camera_handle.0, &mut ti) } {
+        match unsafe { bindings::dcamcap_transferinfo(self.camera_handle, &mut ti) } {
             1 => Ok((ti.nNewestFrameIndex as usize, ti.nFrameCount)),
             e => Err(e),
         }
@@ -272,7 +266,7 @@ impl FrameBuffer {
     }
     /// get an api wait handle
     fn get_wait_handle(&self) -> Result<bindings::HDCAMWAIT, i32> {
-        let mut dcwo = bindings::DCAMWAIT_OPEN::new(self.camera_handle.0);
+        let mut dcwo = bindings::DCAMWAIT_OPEN::new(self.camera_handle);
         match unsafe { bindings::dcamwait_open(&mut dcwo) } {
             1 => Ok(dcwo.hwait),
             e => Err(e),
@@ -282,7 +276,7 @@ impl FrameBuffer {
 
 ///Stream frames off of the camera as `Vec<u8>`. Allow `bufsize` frames to pile up
 ///in the channel before we panic
-pub fn stream_frames(f: FrameBuffer, bufsize: usize) -> Result<Receiver<Vec<u8>>, i32> {
+/* pub fn stream_frames(f: FrameBuffer, bufsize: usize) -> Result<Receiver<Vec<u8>>, i32> {
     let mut dws = bindings::DCAMWAIT_START::new();
     // make our channel
     let (tx, rx) = sync_channel::<Vec<u8>>(bufsize);
@@ -293,7 +287,7 @@ pub fn stream_frames(f: FrameBuffer, bufsize: usize) -> Result<Receiver<Vec<u8>>
         //start capturing
         let err = unsafe {
             bindings::dcamcap_start(
-                f.camera_handle.0,
+                f.camera_handle,
                 bindings::DCAMCAP_START_DCAMCAP_START_SEQUENCE,
             )
         };
@@ -312,7 +306,7 @@ pub fn stream_frames(f: FrameBuffer, bufsize: usize) -> Result<Receiver<Vec<u8>>
     });
     //start capturing frames
     return Ok(rx);
-}
+} */
 
 impl Drop for FrameBuffer {
     fn drop(&mut self) {
@@ -322,5 +316,63 @@ impl Drop for FrameBuffer {
                 bindings::DCAM_ATTACHKIND_DCAMBUF_ATTACHKIND_FRAME,
             );
         }
+    }
+}
+
+///Struct for representing a frame source. Can call stream() to get a frame stream
+pub struct DcamSource {
+    api: DcamAPI,
+    camid: i32,
+}
+
+///Struct for representing a stream of frames. can call recv to grab frames, stop to stop
+pub struct DcamStream {
+    ///channel we are recieving streams on
+    rx: Receiver<Vec<u8>>,
+    ///channel we use to kill the capture thread
+    tx: Sender<bool>,
+    thread_handle: Box<dyn JoinHandle>,
+}
+
+impl DcamSource {
+    pub fn new(api: DcamAPI, camid: i32) -> DcamSource {
+        DcamSource { api, camid }
+    }
+    ///Stream from a camera with type `T`. `bufsize` is the size of the image buffer
+    ///as well as the size of the buffer the frames are written to by the thread spawned here
+    pub fn stream<T: Camera>(&self, bufsize: usize) -> DcamStream {
+        //build our channels
+        let (frametx, framerx) = sync_channel::<Vec<u8>>(bufsize);
+        let (controltx, controlrx) = channel::<bool>(1);
+        //spawn a thread that initializes the camera and starts shoving frames into frametx
+        let thread_handle = thread.spawn(move || {
+            let cam = api
+                .open_cam::<T>(self.camid)
+                .expect("Couldn't get camera handle");
+            let framebuffer = cam.attach_buffer(bufsize).expect("couldn't attach buffer");
+            //get a wait handle
+            let mut dws = bindings::DCAMWAIT_START::new();
+            let hwait = f.get_wait_handle().expect("Couldn't get wait handle");
+            //start capturing
+			//pick up here, add logic for safely stopping the thread through controlrx, return the struct
+            let err = unsafe {
+                bindings::dcamcap_start(
+                    f.camera_handle,
+                    bindings::DCAMCAP_START_DCAMCAP_START_SEQUENCE,
+                )
+            };
+            assert_eq!(1, err, "couldn't start acquisition");
+            loop {
+                let err = unsafe {
+                    // here we have to acquire the lock and then dereference
+                    bindings::dcamwait_start(hwait, &mut dws)
+                };
+                assert_eq!(1, err);
+                match tx.try_send(f.copy_most_recent_frame().expect("failed to copy frame")) {
+                    Ok(()) => {}
+                    Err(_) => panic!("buffer overflow"),
+                }
+            }
+        });
     }
 }
