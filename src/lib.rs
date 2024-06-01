@@ -4,7 +4,7 @@ use std::ops::Index;
 use std::ops::IndexMut;
 use std::os::raw;
 use std::ptr;
-use std::sync::mpsc::{channel, sync_channel, Receiver, RecvError, Sender};
+use std::sync::mpsc::{channel, sync_channel, Receiver, RecvError, Sender, TryRecvError};
 use std::thread::{self, JoinHandle};
 
 pub mod bindings;
@@ -87,6 +87,7 @@ pub trait Camera: Drop {
         let w = self.get_image_width()?;
         Ok([h, w])
     }
+    /// Get the api handle for this camera
     fn handle(&self) -> bindings::HDCAM;
     /// use the 'raw' dcamdev_getstring() function to get camera info.
     /// currently the API will copy the string into a buffer with a fixed length of 256 bytes
@@ -157,7 +158,6 @@ impl Camera for C11440_22CU {
     fn handle(&self) -> bindings::HDCAM {
         self.handle
     }
-    ///pick up here
     fn get_exposure(&self) -> Result<f64, i32> {
         self.dcamprop_getvalue(bindings::_DCAMIDPROP_DCAM_IDPROP_EXPOSURETIME)
     }
@@ -274,40 +274,6 @@ impl FrameBuffer {
     }
 }
 
-///Stream frames off of the camera as `Vec<u8>`. Allow `bufsize` frames to pile up
-///in the channel before we panic
-/* pub fn stream_frames(f: FrameBuffer, bufsize: usize) -> Result<Receiver<Vec<u8>>, i32> {
-    let mut dws = bindings::DCAMWAIT_START::new();
-    // make our channel
-    let (tx, rx) = sync_channel::<Vec<u8>>(bufsize);
-    // spawn a thread that copies off a frame into the channel whenever it hears from the API
-    thread::spawn(move || {
-        // Get a wait handle
-        let hwait = f.get_wait_handle().expect("Couldn't get wait handle");
-        //start capturing
-        let err = unsafe {
-            bindings::dcamcap_start(
-                f.camera_handle,
-                bindings::DCAMCAP_START_DCAMCAP_START_SEQUENCE,
-            )
-        };
-        assert_eq!(1, err, "couldn't start acquisition");
-        loop {
-            let err = unsafe {
-                // here we have to acquire the lock and then dereference
-                bindings::dcamwait_start(hwait, &mut dws)
-            };
-            assert_eq!(1, err);
-            match tx.try_send(f.copy_most_recent_frame().expect("failed to copy frame")) {
-                Ok(()) => {}
-                Err(_) => panic!("buffer overflow"),
-            }
-        }
-    });
-    //start capturing frames
-    return Ok(rx);
-} */
-
 impl Drop for FrameBuffer {
     fn drop(&mut self) {
         unsafe {
@@ -335,6 +301,7 @@ pub struct DcamStream {
 }
 
 impl DcamSource {
+    /// Create a new `DcamSource` for pulling frames off of the camera with API index `camid`
     pub fn new(camid: i32) -> DcamSource {
         DcamSource { camid }
     }
@@ -368,6 +335,13 @@ impl DcamSource {
             };
             assert_eq!(1, err, "couldn't start acquisition");
             loop {
+                //check to see if we've been asked to stop
+                match control_rx.try_recv() {
+                    //No messages, channel still open so we continue
+                    Err(TryRecvError::Empty) => {}
+                    //All other options (channel closed, received a value) mean stop
+                    _ => break,
+                }
                 let err = unsafe {
                     // here we have to acquire the lock and then dereference
                     bindings::dcamwait_start(hwait, &mut dws)
@@ -398,7 +372,9 @@ impl DcamStream {
     }
     /// Stop pulling frames, deallocate the buffer
     pub fn stop(self) {
-        self.control_tx.send(());
+        self.control_tx
+            .send(())
+            .expect("Couldn't communicate with frame grabber");
         self.thread_handle
             .join()
             .expect("Couldn't shut down frame grabber");
