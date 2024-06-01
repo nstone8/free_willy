@@ -18,9 +18,9 @@ fn main() {
         }
         Err(e) => println!("Failed, error code: {}", e),
     }
-    //try streaming from our DcamSource interface
-    let source = free_willy::DcamSource::new(0);
-    let stream = source.stream::<free_willy::C11440_22CU>(500);
+    //try streaming from our C11440_22CUSource interface
+    let source = free_willy::C11440_22CUSource::new(0);
+    let stream = source.stream(500);
     loop {
         let f = stream.recv().unwrap();
         println!("{:?}", &f[1..10]);

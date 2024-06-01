@@ -285,9 +285,8 @@ impl Drop for FrameBuffer {
     }
 }
 
-///Struct for representing a frame source. Can call stream() to get a frame stream.
-///The type parameter is the type of `Camera` we are using
-pub struct DcamSource {
+///Struct for representing a source of frames from a C11440_22CU camera. Can call stream() to get a frame stream.
+pub struct C11440_22CUSource {
     camid: i32,
 }
 
@@ -300,68 +299,74 @@ pub struct DcamStream {
     thread_handle: JoinHandle<()>,
 }
 
-impl DcamSource {
+impl C11440_22CUSource {
     /// Create a new `DcamSource` for pulling frames off of the camera with API index `camid`
-    pub fn new(camid: i32) -> DcamSource {
-        DcamSource { camid }
+    pub fn new(camid: i32) -> C11440_22CUSource {
+        C11440_22CUSource { camid }
     }
-    ///Stream from a camera with type `T`. `bufsize` is the size of the image buffer
+    ///Stream from a C11440_22CU. `bufsize` is the size of the image buffer
     ///as well as the size of the buffer the frames are written to by the thread spawned here
-    pub fn stream<T: Camera>(&self, bufsize: usize) -> DcamStream {
-        //build our channels
-        let (frame_tx, frame_rx) = sync_channel::<Vec<u8>>(bufsize);
-        let (control_tx, control_rx) = channel::<()>();
-        //make a copy of our camid
-        let camid = self.camid;
-        //spawn a thread that initializes the camera and starts shoving frames into frametx
-        let thread_handle = thread::spawn(move || {
-            let api = DcamAPI::connect().expect("couldn't communicate with API");
-            let cam = api
-                .open_cam::<T>(camid)
-                .expect("Couldn't get camera handle");
-            let framebuffer = cam.attach_buffer(bufsize).expect("couldn't attach buffer");
-            //get a wait handle
-            let mut dws = bindings::DCAMWAIT_START::new();
-            let hwait = framebuffer
-                .get_wait_handle()
-                .expect("Couldn't get wait handle");
-            //start capturing
-            //pick up here, add logic for safely stopping the thread through controlrx, return the struct
-            let err = unsafe {
-                bindings::dcamcap_start(
-                    framebuffer.camera_handle,
-                    bindings::DCAMCAP_START_DCAMCAP_START_SEQUENCE,
-                )
-            };
-            assert_eq!(1, err, "couldn't start acquisition");
-            loop {
-                //check to see if we've been asked to stop
-                match control_rx.try_recv() {
-                    //No messages, channel still open so we continue
-                    Err(TryRecvError::Empty) => {}
-                    //All other options (channel closed, received a value) mean stop
-                    _ => break,
-                }
-                let err = unsafe {
-                    // here we have to acquire the lock and then dereference
-                    bindings::dcamwait_start(hwait, &mut dws)
-                };
-                assert_eq!(1, err);
-                match frame_tx.try_send(
-                    framebuffer
-                        .copy_most_recent_frame()
-                        .expect("failed to copy frame"),
-                ) {
-                    Ok(()) => {}
-                    Err(_) => panic!("buffer overflow"),
-                }
+    pub fn stream(&self, bufsize: usize) -> DcamStream {
+        stream::<C11440_22CU>(self.camid, bufsize)
+    }
+}
+
+///Stream from a camera with type `T` and API index `camid`. `bufsize` is the size of the image buffer
+///as well as the size of the buffer the frames are written to by the thread spawned here.
+fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
+    //build our channels
+    let (frame_tx, frame_rx) = sync_channel::<Vec<u8>>(bufsize);
+    let (control_tx, control_rx) = channel::<()>();
+    //make a copy of our camid
+    //spawn a thread that initializes the camera and starts shoving frames into frametx
+    let thread_handle = thread::spawn(move || {
+        let api = DcamAPI::connect().expect("couldn't communicate with API");
+        let cam = api
+            .open_cam::<T>(camid)
+            .expect("Couldn't get camera handle");
+        let framebuffer = cam.attach_buffer(bufsize).expect("couldn't attach buffer");
+        //get a wait handle
+        let mut dws = bindings::DCAMWAIT_START::new();
+        let hwait = framebuffer
+            .get_wait_handle()
+            .expect("Couldn't get wait handle");
+        //start capturing
+        //pick up here, add logic for safely stopping the thread through controlrx, return the struct
+        let err = unsafe {
+            bindings::dcamcap_start(
+                framebuffer.camera_handle,
+                bindings::DCAMCAP_START_DCAMCAP_START_SEQUENCE,
+            )
+        };
+        assert_eq!(1, err, "couldn't start acquisition");
+        loop {
+            //check to see if we've been asked to stop
+            match control_rx.try_recv() {
+                //No messages, channel still open so we continue
+                Err(TryRecvError::Empty) => {}
+                //All other options (channel closed, received a value) mean stop
+                _ => break,
             }
-        });
-        DcamStream {
-            frame_rx,
-            control_tx,
-            thread_handle,
+            let err = unsafe {
+                // Wait for the API to tell us about a new frame
+                bindings::dcamwait_start(hwait, &mut dws)
+            };
+            assert_eq!(1, err);
+            match frame_tx.try_send(
+                //send the new frame down the buffer
+                framebuffer
+                    .copy_most_recent_frame()
+                    .expect("failed to copy frame"),
+            ) {
+                Ok(()) => {}
+                Err(_) => panic!("buffer overflow"),
+            }
         }
+    });
+    DcamStream {
+        frame_rx,
+        control_tx,
+        thread_handle,
     }
 }
 
