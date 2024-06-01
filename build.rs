@@ -3,10 +3,9 @@ use std::path::PathBuf;
 
 fn main() {
     // Tell cargo to look for shared libraries in the specified directory
-    println!(r"cargo:rustc-link-search=C:\Users\Nick Stone\Desktop\Hamamatsu_DCAMSDK4_v24026764\dcamsdk4\lib\win64");
+    println!(r"cargo:rustc-link-search=Hamamatsu_DCAMSDK4_v24026764\dcamsdk4\lib\win64");
 
-    // Tell cargo to tell rustc to link the system bzip2
-    // shared library.
+    // Tell cargo to tell rustc to link against dcamapi
     println!("cargo:rustc-link-lib=dcamapi");
 
     // The bindgen::Builder is the main entry point
