@@ -5,6 +5,7 @@ edition = "2021"
 authors = ["Nick Stone <nicholasestone@proton.me>"]
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }
+image = "0.25.1"
 libc = "0.2.155"
 threadpool = "1.8.1"
 
