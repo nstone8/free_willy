@@ -1,3 +1,4 @@
+use image::{ImageBuffer, Luma};
 use libc;
 use std::ffi::CStr;
 use std::ops::Index;
@@ -81,11 +82,11 @@ pub trait Camera: Drop {
     fn get_image_height(&self) -> Result<i32, i32>;
     /// get the number of bytes per frame with current settings
     fn get_framebytes(&self) -> Result<usize, i32>;
-    /// Get the current image resolution, on error this returns an `Err(DCAM_ERROR)`
+    /// Get the current image resolution `[w,h]`, on error this returns an `Err(DCAM_ERROR)`
     fn get_resolution(&self) -> Result<[i32; 2], i32> {
         let h = self.get_image_height()?;
         let w = self.get_image_width()?;
-        Ok([h, w])
+        Ok([w, h])
     }
     /// Get the api handle for this camera
     fn handle(&self) -> bindings::HDCAM;
@@ -197,22 +198,22 @@ pub struct FrameBuffer {
     camera_handle: bindings::HDCAM,
     frame_size: usize,
     num_frames: usize,
-    buffer: Vec<u8>,
+    buffer: Vec<u16>,
 }
 
 ///Make it so we can pull one frame's worth of data by index
 impl Index<usize> for FrameBuffer {
-    type Output = [u8];
-    fn index(&self, index: usize) -> &[u8] {
+    type Output = [u16];
+    fn index(&self, index: usize) -> &[u16] {
         assert!(index < self.num_frames);
-        &self.buffer[index * self.frame_size..(index + 1) * self.frame_size]
+        &self.buffer[index * self.frame_size / 2..(index + 1) * self.frame_size / 2]
     }
 }
 
 impl IndexMut<usize> for FrameBuffer {
-    fn index_mut(&mut self, index: usize) -> &mut [u8] {
+    fn index_mut(&mut self, index: usize) -> &mut [u16] {
         assert!(index < self.num_frames);
-        &mut self.buffer[index * self.frame_size..(index + 1) * self.frame_size]
+        &mut self.buffer[index * self.frame_size / 2..(index + 1) * self.frame_size / 2]
     }
 }
 
@@ -227,7 +228,7 @@ impl FrameBuffer {
             camera_handle: camera_handle,
             frame_size,
             num_frames,
-            buffer: vec![0; frame_size * num_frames],
+            buffer: vec![0; (frame_size) / 2 * num_frames],
         };
         //we need to create an array of pointers to each frame
         let mut pvec: Vec<*mut libc::c_void> = (0..num_frames)
@@ -258,7 +259,7 @@ impl FrameBuffer {
         }
     }
     ///get a copy of the most recently captured frame
-    fn copy_most_recent_frame(&self) -> Result<Vec<u8>, i32> {
+    fn copy_most_recent_frame(&self) -> Result<Vec<u16>, i32> {
         match self.most_recent_frame_index() {
             Ok(i) => Ok(self[i].to_vec()),
             Err(e) => Err(e),
@@ -293,7 +294,7 @@ pub struct C11440_22CUSource {
 ///Struct for representing a stream of frames. can call recv to grab frames, stop to stop
 pub struct DcamStream {
     ///channel we are recieving streams on
-    frame_rx: Receiver<Vec<u8>>,
+    frame_rx: Receiver<ImageBuffer<Luma<u16>, Vec<u16>>>,
     ///channel we use to kill the capture thread
     control_tx: Sender<()>,
     thread_handle: JoinHandle<()>,
@@ -315,7 +316,7 @@ impl C11440_22CUSource {
 ///as well as the size of the buffer the frames are written to by the thread spawned here.
 fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
     //build our channels
-    let (frame_tx, frame_rx) = sync_channel::<Vec<u8>>(bufsize);
+    let (frame_tx, frame_rx) = sync_channel::<ImageBuffer<Luma<u16>, Vec<u16>>>(bufsize);
     let (control_tx, control_rx) = channel::<()>();
     //make a copy of our camid
     //spawn a thread that initializes the camera and starts shoving frames into frametx
@@ -325,6 +326,8 @@ fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
             .open_cam::<T>(camid)
             .expect("Couldn't get camera handle");
         let framebuffer = cam.attach_buffer(bufsize).expect("couldn't attach buffer");
+        //get our image size
+        let imsize = cam.get_resolution().expect("couldn't get image resolution");
         //get a wait handle
         let mut dws = bindings::DCAMWAIT_START::new();
         let hwait = framebuffer
@@ -352,12 +355,19 @@ fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
                 bindings::dcamwait_start(hwait, &mut dws)
             };
             assert_eq!(1, err);
-            match frame_tx.try_send(
-                //send the new frame down the buffer
-                framebuffer
-                    .copy_most_recent_frame()
-                    .expect("failed to copy frame"),
-            ) {
+            //grab the newest frame
+            let new_frame_raw = framebuffer
+                .copy_most_recent_frame()
+                .expect("failed to copy frame");
+            //convert to an image
+            let new_frame = ImageBuffer::<Luma<u16>, Vec<u16>>::from_raw(
+                imsize[0] as u32,
+                imsize[1] as u32,
+                new_frame_raw,
+            )
+            .expect("failed to convert to image");
+            //send the new frame down the buffer
+            match frame_tx.try_send(new_frame) {
                 Ok(()) => {}
                 Err(_) => panic!("buffer overflow"),
             }
@@ -372,7 +382,7 @@ fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
 
 impl DcamStream {
     /// Pull a frame off of the buffer
-    pub fn recv(&self) -> Result<Vec<u8>, RecvError> {
+    pub fn recv(&self) -> Result<ImageBuffer<Luma<u16>, Vec<u16>>, RecvError> {
         self.frame_rx.recv()
     }
     /// Stop pulling frames, deallocate the buffer

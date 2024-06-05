@@ -23,6 +23,6 @@ fn main() {
     let stream = source.stream(500);
     loop {
         let f = stream.recv().unwrap();
-        println!("{:?}", &f[1..10]);
+        println!("{:?}", f.get_pixel(0, 0));
     }
 }
