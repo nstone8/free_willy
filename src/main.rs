@@ -1,4 +1,6 @@
 use free_willy::Camera;
+use free_willy::viewer;
+use iced::{Application,Settings};
 fn main() {
     //print camera info
     match free_willy::DcamAPI::connect() {
@@ -19,10 +21,5 @@ fn main() {
         Err(e) => println!("Failed, error code: {}", e),
     }
     //try streaming from our C11440_22CUSource interface
-    let source = free_willy::C11440_22CUSource::new(0);
-    let stream = source.stream(500);
-    loop {
-        let f = stream.recv().unwrap();
-        println!("{:?}", f.get_pixel(0, 0));
-    }
+	viewer::Viewer::run(Settings::default()).expect("couldn't run app");
 }

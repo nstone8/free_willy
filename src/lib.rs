@@ -9,6 +9,7 @@ use std::sync::mpsc::{channel, sync_channel, Receiver, RecvError, Sender, TryRec
 use std::thread::{self, JoinHandle};
 
 pub mod bindings;
+pub mod viewer;
 
 /// `struct` to represent an instance of the DCAM API
 pub struct DcamAPI {
@@ -394,4 +395,14 @@ impl DcamStream {
             .join()
             .expect("Couldn't shut down frame grabber");
     }
+}
+
+impl Iterator for DcamStream{
+	type Item = ImageBuffer<Luma<u16>, Vec<u16>>;
+	fn next(&mut self) -> Option<ImageBuffer<Luma<u16>, Vec<u16>>> {
+		match self.recv() {
+			Ok(im) => Some(im),
+			Err(_) => None
+		}
+	}
 }
