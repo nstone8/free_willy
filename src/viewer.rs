@@ -62,8 +62,8 @@ impl Application for Viewer {
                     .expect("couldn't send frame")
             }
         });
-
-        let initial_handle = Handle::from_path("uiowa.png");
+        let initial_pixels: Vec<u8> = vec![0, 0, 0, 0];
+        let initial_handle = Handle::from_pixels(1, 1, initial_pixels);
         (
             Viewer {
                 threadtx,
