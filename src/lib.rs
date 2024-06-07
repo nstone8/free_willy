@@ -397,12 +397,12 @@ impl DcamStream {
     }
 }
 
-impl Iterator for DcamStream{
-	type Item = ImageBuffer<Luma<u16>, Vec<u16>>;
-	fn next(&mut self) -> Option<ImageBuffer<Luma<u16>, Vec<u16>>> {
-		match self.recv() {
-			Ok(im) => Some(im),
-			Err(_) => None
-		}
-	}
+impl Iterator for DcamStream {
+    type Item = ImageBuffer<Luma<u16>, Vec<u16>>;
+    fn next(&mut self) -> Option<ImageBuffer<Luma<u16>, Vec<u16>>> {
+        match self.recv() {
+            Ok(im) => Some(im),
+            Err(_) => None,
+        }
+    }
 }
