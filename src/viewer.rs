@@ -37,7 +37,9 @@ impl Application for Viewer {
         //thread to allow us to change the destination of the frames without restarting the thread
         let (threadtx, threadrx) = channel::<ThreadMessage>();
         thread::spawn(move || {
-            let source = crate::C11440_22CUSource::new(0);
+            let mut source = crate::C11440_22CUSource::new(0);
+            //change the exposure
+            source.set_exposure(0.002);
             //wait until we have a consumer of frames to start the stream
             let Ok(ThreadMessage::ChangeConsumer(mut frametx)) = threadrx.recv() else {
                 panic!("couldn't get a consumer for frames");

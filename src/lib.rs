@@ -77,6 +77,9 @@ pub trait Camera: Drop {
     fn new(handle: bindings::HDCAM) -> Self;
     /// Get the current exposure time, on error this returns an `Err(DCAM_ERROR)`
     fn get_exposure(&self) -> Result<f64, i32>;
+    /// Set the exposure time, on error this returns an `Err(DCAM_ERROR)`. On success
+    /// this will return the actual exposure value that was set.
+    fn set_exposure(&self, exposure: f64) -> Result<f64, i32>;
     /// get the current image width, on error this returns an `Err(DCAM_ERROR)`
     fn get_image_width(&self) -> Result<i32, i32>;
     /// get the current image height, on error this returns an `Err(DCAM_ERROR)`
@@ -162,6 +165,28 @@ impl Camera for C11440_22CU {
     }
     fn get_exposure(&self) -> Result<f64, i32> {
         self.dcamprop_getvalue(bindings::_DCAMIDPROP_DCAM_IDPROP_EXPOSURETIME)
+    }
+    fn set_exposure(&self, exposure: f64) -> Result<f64, i32> {
+        //Not all values are allowed
+        let minval = 0.001003669;
+        let maxval = 10.0;
+        let step = 0.00000001;
+        let newval = if exposure < minval {
+            minval
+        } else if exposure > maxval {
+            maxval
+        } else {
+            let amt_above_min = exposure - minval;
+            //we're casting to int to intentionally truncate
+            let steps_above_min = (amt_above_min / step) as u32; //we actually need this much precision
+                                                                 //This value is allowed
+            amt_above_min + (step * (steps_above_min as f64))
+        };
+        //Set newval in the API
+        match self.dcamprop_setvalue(bindings::_DCAMIDPROP_DCAM_IDPROP_EXPOSURETIME, newval) {
+            Ok(()) => Ok(newval),
+            Err(e) => Err(e),
+        }
     }
     fn get_image_width(&self) -> Result<i32, i32> {
         match self.dcamprop_getvalue(bindings::_DCAMIDPROP_DCAM_IDPROP_IMAGE_WIDTH) {
@@ -290,6 +315,7 @@ impl Drop for FrameBuffer {
 ///Struct for representing a source of frames from a C11440_22CU camera. Can call stream() to get a frame stream.
 pub struct C11440_22CUSource {
     camid: i32,
+    exposure: f64,
 }
 
 ///Struct for representing a stream of frames. can call recv to grab frames, stop to stop
@@ -304,18 +330,26 @@ pub struct DcamStream {
 impl C11440_22CUSource {
     /// Create a new `DcamSource` for pulling frames off of the camera with API index `camid`
     pub fn new(camid: i32) -> C11440_22CUSource {
-        C11440_22CUSource { camid }
+        //0.00999771 is the default exposure time for the api
+        C11440_22CUSource {
+            camid,
+            exposure: 0.00999771,
+        }
     }
     ///Stream from a C11440_22CU. `bufsize` is the size of the image buffer
     ///as well as the size of the buffer the frames are written to by the thread spawned here
     pub fn stream(&self, bufsize: usize) -> DcamStream {
-        stream::<C11440_22CU>(self.camid, bufsize)
+        stream::<C11440_22CU>(self.camid, bufsize, self.exposure)
+    }
+    ///Change the exposure value. Minimum is `0.001003669` Maximum is `10.0`
+    pub fn set_exposure(&mut self, exposure: f64) {
+        self.exposure = exposure;
     }
 }
 
 ///Stream from a camera with type `T` and API index `camid`. `bufsize` is the size of the image buffer
 ///as well as the size of the buffer the frames are written to by the thread spawned here.
-fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
+fn stream<T: Camera>(camid: i32, bufsize: usize, exposure: f64) -> DcamStream {
     //build our channels
     let (frame_tx, frame_rx) = sync_channel::<ImageBuffer<Luma<u16>, Vec<u16>>>(bufsize);
     let (control_tx, control_rx) = channel::<()>();
@@ -326,6 +360,9 @@ fn stream<T: Camera>(camid: i32, bufsize: usize) -> DcamStream {
         let cam = api
             .open_cam::<T>(camid)
             .expect("Couldn't get camera handle");
+        //update our capture settings here
+        cam.set_exposure(exposure)
+            .expect("couldn't change exposure");
         let framebuffer = cam.attach_buffer(bufsize).expect("couldn't attach buffer");
         //get our image size
         let imsize = cam.get_resolution().expect("couldn't get image resolution");
