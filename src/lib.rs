@@ -86,6 +86,9 @@ pub trait Camera: Drop {
     fn get_image_height(&self) -> Result<i32, i32>;
     /// get the number of bytes per frame with current settings
     fn get_framebytes(&self) -> Result<usize, i32>;
+    /// set the image size that we want to capture, if the ROI won't fit in the maximum capture
+    /// area it will be shrunk so it does, This function returns the actual resolution that was applied
+    fn set_resolution(&self, resolution: [usize; 2]) -> Result<[usize; 2], i32>;
     /// Get the current image resolution `[w,h]`, on error this returns an `Err(DCAM_ERROR)`
     fn get_resolution(&self) -> Result<[i32; 2], i32> {
         let h = self.get_image_height()?;
@@ -207,6 +210,52 @@ impl Camera for C11440_22CU {
             Err(e) => Err(e),
         }
     }
+    ///In DCAM terminology our resolution is [H,V]
+    fn set_resolution(&self, resolution: [usize; 2]) -> Result<[usize; 2], i32> {
+        //the size runs from 0 to 2044 in steps of 4
+        let size: Vec<usize> = resolution
+            .iter()
+            .map(|size| {
+                //absolute max size in this dimension is 2044
+                //min size is 4
+                let size = if *size < 4 {
+                    4
+                } else if *size > 2044 {
+                    2044
+                } else {
+                    *size
+                };
+                //size must be a multiple of 4
+                (size / 4) * 4
+            })
+            .collect();
+        //write this to the API and return the applied size
+        //first need to turn sub array mode on
+        match self.dcamprop_setvalue(
+            bindings::_DCAMIDPROP_DCAM_IDPROP_SUBARRAYMODE,
+            bindings::_DCAMPROPMODEVALUE_DCAMPROP_MODE__ON as f64,
+        ) {
+            Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+        match self.dcamprop_setvalue(
+            bindings::_DCAMIDPROP_DCAM_IDPROP_SUBARRAYHSIZE,
+            size[0] as f64,
+        ) {
+            Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+        match self.dcamprop_setvalue(
+            bindings::_DCAMIDPROP_DCAM_IDPROP_SUBARRAYVSIZE,
+            size[1] as f64,
+        ) {
+            Ok(()) => {}
+            Err(e) => return Err(e),
+        }
+        //If we got here everything is ok
+        assert_eq!(2, size.len());
+        Ok([size[0], size[1]])
+    }
 }
 
 /// Automatically release camera when our handle is dropped
@@ -316,6 +365,7 @@ impl Drop for FrameBuffer {
 pub struct C11440_22CUSource {
     camid: i32,
     exposure: f64,
+    resolution: [usize; 2],
 }
 
 ///Struct for representing a stream of frames. can call recv to grab frames, stop to stop
@@ -334,22 +384,31 @@ impl C11440_22CUSource {
         C11440_22CUSource {
             camid,
             exposure: 0.00999771,
+            resolution: [2048, 2048],
         }
     }
     ///Stream from a C11440_22CU. `bufsize` is the size of the image buffer
     ///as well as the size of the buffer the frames are written to by the thread spawned here
     pub fn stream(&self, bufsize: usize) -> DcamStream {
-        stream::<C11440_22CU>(self.camid, bufsize, self.exposure)
+        stream::<C11440_22CU>(self.camid, bufsize, self.exposure, self.resolution)
     }
     ///Change the exposure value. Minimum is `0.001003669` Maximum is `10.0`
     pub fn set_exposure(&mut self, exposure: f64) {
         self.exposure = exposure;
     }
+    pub fn set_resolution(&mut self, resolution: [usize; 2]) {
+        self.resolution = resolution;
+    }
 }
 
 ///Stream from a camera with type `T` and API index `camid`. `bufsize` is the size of the image buffer
 ///as well as the size of the buffer the frames are written to by the thread spawned here.
-fn stream<T: Camera>(camid: i32, bufsize: usize, exposure: f64) -> DcamStream {
+fn stream<T: Camera>(
+    camid: i32,
+    bufsize: usize,
+    exposure: f64,
+    resolution: [usize; 2],
+) -> DcamStream {
     //build our channels
     let (frame_tx, frame_rx) = sync_channel::<ImageBuffer<Luma<u16>, Vec<u16>>>(bufsize);
     let (control_tx, control_rx) = channel::<()>();
@@ -363,6 +422,8 @@ fn stream<T: Camera>(camid: i32, bufsize: usize, exposure: f64) -> DcamStream {
         //update our capture settings here
         cam.set_exposure(exposure)
             .expect("couldn't change exposure");
+        cam.set_resolution(resolution)
+            .expect("couldn't change resolution");
         let framebuffer = cam.attach_buffer(bufsize).expect("couldn't attach buffer");
         //get our image size
         let imsize = cam.get_resolution().expect("couldn't get image resolution");
