@@ -8,6 +8,7 @@ futures = "0.3.30"
 iced = { version = "0.12.1", features = ["image", "advanced"] }
 image = "0.25.1"
 libc = "0.2.155"
+ralston = { git = "https://github.com/nstone8/ralston", version = "0.1.0" }
 
 [build-dependencies]
 bindgen = "0.69.4"

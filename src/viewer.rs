@@ -6,6 +6,7 @@ use iced::widget::Container;
 use iced::{executor, subscription, Application, Command, Element, Theme};
 use image::buffer::ConvertBuffer;
 use image::{ImageBuffer, Luma, RgbaImage};
+use ralston::{Frame, FrameSource};
 use std::sync::mpsc::{channel, Sender, TryRecvError};
 use std::thread;
 
@@ -37,7 +38,7 @@ impl Application for Viewer {
         //thread to allow us to change the destination of the frames without restarting the thread
         let (threadtx, threadrx) = channel::<ThreadMessage>();
         thread::spawn(move || {
-            let mut source = crate::C11440_22CUSource::new(0);
+            let mut source = crate::C11440_22CUSource::new(0, 500);
             //change the exposure
             source.set_exposure(0.0);
             source.set_resolution([512, 512]);
@@ -45,8 +46,10 @@ impl Application for Viewer {
             let Ok(ThreadMessage::ChangeConsumer(mut frametx)) = threadrx.recv() else {
                 panic!("couldn't get a consumer for frames");
             };
+            //make a channel for our source
+            let (sourcetx, sourcerx) = channel::<Frame<Luma<u16>, Vec<u16>>>();
             //start the stream
-            let stream = source.stream(500);
+            let _stream = source.start(sourcetx);
             //shove frames until asked to stop
             loop {
                 //check to make sure we're using the right channel and that we should keep going
@@ -61,7 +64,7 @@ impl Application for Viewer {
                 }
                 //grab a frame and shove it in the pipe
                 frametx
-                    .try_send(stream.recv().expect("couldn't grab frame"))
+                    .try_send(sourcerx.recv().expect("couldn't grab frame").to_image())
                     .expect("couldn't send frame")
             }
         });
