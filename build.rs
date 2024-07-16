@@ -3,8 +3,19 @@ use std::path::PathBuf;
 
 fn main() {
     // Tell cargo to look for shared libraries in the specified directory
-    println!(r"cargo:rustc-link-search=Hamamatsu_DCAMSDK4_v24026764\dcamsdk4\lib\win64");
-
+    let link_path = [
+        env!("CARGO_MANIFEST_DIR"),
+        "Hamamatsu_DCAMSDK4_v24026764",
+        "dcamsdk4",
+        "lib",
+        "win64",
+    ]
+    .iter()
+    .collect::<PathBuf>();
+    match link_path.to_str() {
+        Some(link_path_str) => println!("cargo:rustc-link-search={link_path_str}"),
+        None => panic!("Path of free_willy crate not valid unicode"),
+    }
     // Tell cargo to tell rustc to link against dcamapi
     println!("cargo:rustc-link-lib=dcamapi");
 
