@@ -11,7 +11,6 @@ use std::thread::{self, JoinHandle};
 use std::time::Instant;
 
 pub mod bindings;
-pub mod viewer;
 
 /// `struct` to represent an instance of the DCAM API
 pub struct DcamAPI {

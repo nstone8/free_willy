@@ -1,14 +1,15 @@
 [package]
 name = "free_willy"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 authors = ["Nick Stone <nicholasestone@proton.me>"]
 [dependencies]
-futures = "0.3.30"
-iced = { version = "0.12.1", features = ["image", "advanced"] }
 image = "0.25.1"
 libc = "0.2.155"
 ralston = { version = "0.2.0", git = "https://github.com/nstone8/ralston" }
 
 [build-dependencies]
 bindgen = "0.69.4"
+
+[lib]
+crate-type = ["dylib"]
