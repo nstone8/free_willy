@@ -1,4 +1,4 @@
-use image::{ImageBuffer, Luma};
+use image::{DynamicImage, ImageBuffer, Luma};
 use libc;
 use ralston::{Frame, FrameSource, FrameStream};
 use std::ffi::CStr;
@@ -392,7 +392,7 @@ impl C11440_22CUSource {
     }
     ///Stream from a C11440_22CU. `bufsize` is the size of the image buffer
     ///as well as the size of the buffer the frames are written to by the thread spawned here
-    fn stream(&self, sender: Sender<Frame<Luma<u16>, Vec<u16>>>) -> DcamStream {
+    fn stream(&self, sender: Sender<Frame>) -> DcamStream {
         stream::<C11440_22CU>(
             self.camid,
             self.bufsize,
@@ -404,8 +404,6 @@ impl C11440_22CUSource {
 }
 
 impl FrameSource for C11440_22CUSource {
-    type PixelType = Luma<u16>;
-    type ImageContainerType = Vec<u16>;
     type Stream = DcamStream;
     ///Change the exposure value. Minimum is `0.001003669` Maximum is `10.0`
     fn set_exposure(&mut self, exposure: f64) {
@@ -420,17 +418,14 @@ impl FrameSource for C11440_22CUSource {
     fn get_resolution(&self) -> [usize; 2] {
         self.resolution
     }
-    fn start(
-        &self,
-        sender: Sender<Frame<Self::PixelType, Self::ImageContainerType>>,
-    ) -> Self::Stream {
+    fn start(&self, sender: Sender<Frame>) -> Self::Stream {
         self.stream(sender)
     }
 }
 
 ///Messages to send to our streaming thread
 enum DcamStreamMessage {
-    ChangeConsumer(Sender<Frame<Luma<u16>, Vec<u16>>>),
+    ChangeConsumer(Sender<Frame>),
     Stop,
 }
 ///Stream from a camera with type `T` and API index `camid`. `bufsize` is the size of the image buffer
@@ -440,7 +435,7 @@ fn stream<T: Camera>(
     bufsize: usize,
     exposure: f64,
     resolution: [usize; 2],
-    mut frame_tx: Sender<Frame<Luma<u16>, Vec<u16>>>,
+    mut frame_tx: Sender<Frame>,
 ) -> DcamStream {
     //build our channels
     //let (frame_tx, frame_rx) = sync_channel::<ImageBuffer<Luma<u16>, Vec<u16>>>(bufsize);
@@ -505,7 +500,10 @@ fn stream<T: Camera>(
             )
             .expect("failed to convert to image");
             //send the new frame down the buffer
-            match frame_tx.send(Frame::new(start_time.elapsed(), new_frame)) {
+            match frame_tx.send(Frame::new(
+                start_time.elapsed(),
+                DynamicImage::ImageLuma16(new_frame),
+            )) {
                 Ok(()) => {}
                 Err(_) => panic!("Couldn't send new frame to buffer"),
             }
@@ -530,12 +528,10 @@ impl DcamStream {
 }
 
 impl FrameStream for DcamStream {
-    type PixelType = Luma<u16>;
-    type ImageContainerType = Vec<u16>;
     fn stop(self) {
         Self::stop(self);
     }
-    fn change_consumer(&mut self, sender: Sender<Frame<Luma<u16>, Vec<u16>>>) {
+    fn change_consumer(&mut self, sender: Sender<Frame>) {
         self.control_tx
             .send(DcamStreamMessage::ChangeConsumer(sender))
             .expect("Couldn't communicate with frame grabber");

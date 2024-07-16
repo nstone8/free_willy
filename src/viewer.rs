@@ -4,17 +4,16 @@ use iced::futures::SinkExt;
 use iced::widget::image::{Handle, Image};
 use iced::widget::Container;
 use iced::{executor, subscription, Application, Command, Element, Theme};
-use image::buffer::ConvertBuffer;
-use image::{ImageBuffer, Luma, RgbaImage};
+use image::{DynamicImage, RgbaImage};
 use ralston::{Frame, FrameSource};
 use std::sync::mpsc::{channel, Sender, TryRecvError};
 use std::thread;
 
-type IBuffer = ImageBuffer<Luma<u16>, Vec<u16>>;
+type IBuffer = DynamicImage;
 
 #[derive(Debug)]
 pub enum ViewMessage {
-    UpdateImage(ImageBuffer<Luma<u16>, Vec<u16>>),
+    UpdateImage(DynamicImage),
 }
 
 enum ThreadMessage {
@@ -47,7 +46,7 @@ impl Application for Viewer {
                 panic!("couldn't get a consumer for frames");
             };
             //make a channel for our source
-            let (sourcetx, sourcerx) = channel::<Frame<Luma<u16>, Vec<u16>>>();
+            let (sourcetx, sourcerx) = channel::<Frame>();
             //start the stream
             let _stream = source.start(sourcetx);
             //shove frames until asked to stop
@@ -110,11 +109,14 @@ impl Application for Viewer {
                 threadtx
                     .send(ThreadMessage::ChangeConsumer(frametx))
                     .expect("couldn't register with frame grabber");
+                let mut i = 1;
                 loop {
                     output
                         .send(ViewMessage::UpdateImage(framerx.select_next_some().await))
                         .await
                         .expect("couldn't send frame in subscription");
+                    println!("sent frame {i}");
+                    i += 1;
                 }
             },
         )
@@ -122,7 +124,7 @@ impl Application for Viewer {
 }
 
 ///Little helper function for converting a [image::ImageBuffer] into a [iced::image::Handle]
-fn buf_to_handle(image: ImageBuffer<Luma<u16>, Vec<u16>>) -> Handle {
-    let rgba: RgbaImage = image.convert();
+fn buf_to_handle(image: DynamicImage) -> Handle {
+    let rgba: RgbaImage = image.into_rgba8();
     Handle::from_pixels(rgba.width(), rgba.height(), rgba.as_raw().clone())
 }
