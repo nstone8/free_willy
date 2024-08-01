@@ -507,6 +507,9 @@ fn stream<T: Camera>(
                 Err(_) => panic!("Couldn't send new frame to buffer"),
             }
         }
+        //make sure the camera is stopped
+        let err = unsafe { bindings::dcamcap_stop(framebuffer.camera_handle) };
+        assert_eq!(1, err, "couldn't stop acquisition");
     });
     DcamStream {
         control_tx,
